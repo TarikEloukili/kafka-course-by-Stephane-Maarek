@@ -1,0 +1,1 @@
+rootProject.name = "Kafka-course-by-Stephane-Maarek"
