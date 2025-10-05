@@ -18,6 +18,7 @@ dependencies {
 
     // https://mvnrepository.com/artifact/org.slf4j/slf4j-simple
     implementation("org.slf4j:slf4j-simple:1.7.36")
+
 }
 
 tasks.test {
