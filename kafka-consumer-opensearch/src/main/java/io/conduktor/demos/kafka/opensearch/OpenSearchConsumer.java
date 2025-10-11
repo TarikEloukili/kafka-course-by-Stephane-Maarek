@@ -6,14 +6,24 @@ import org.apache.http.auth.UsernamePasswordCredentials;
 import org.apache.http.client.CredentialsProvider;
 import org.apache.http.impl.client.BasicCredentialsProvider;
 import org.apache.http.impl.client.DefaultConnectionKeepAliveStrategy;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.common.serialization.StringDeserializer;
+import org.opensearch.action.index.IndexRequest;
+import org.opensearch.action.index.IndexResponse;
 import org.opensearch.client.RequestOptions;
 import org.opensearch.client.RestClient;
 import org.opensearch.client.RestHighLevelClient;
 import org.opensearch.client.indices.CreateIndexRequest;
 import org.opensearch.client.indices.GetIndexRequest;
+import org.opensearch.common.xcontent.XContentType;
 
 import java.io.IOException;
 import java.net.URI;
+import java.time.Duration;
+import java.util.Collections;
+import java.util.Properties;
 import java.util.logging.Logger;
 
 public class OpenSearchConsumer {
@@ -50,31 +60,69 @@ public class OpenSearchConsumer {
         return restHighLevelClient;
     }
 
+    private static KafkaConsumer<String, String> createKafkaConsumer(){
+
+        String bootstrapServers = "127.0.0.1:9092";
+        String groupId = "consumer-opensearch-demo";
+
+        // create consumer properties
+        Properties properties = new Properties();
+
+        //connect to localhost
+        properties.setProperty("bootstrap.servers", bootstrapServers);
+
+        // create consumer configs
+        properties.setProperty("key.deserializer", StringDeserializer.class.getName());
+        properties.setProperty("value.deserializer", StringDeserializer.class.getName());
+        properties.setProperty("group.id", groupId);
+        properties.setProperty("auto.offset.reset", "latest");
+
+        // return a consumer
+        return new KafkaConsumer<>(properties);
+    }
+
 
     public static void main(String[] args) throws IOException {
-
         Logger log = Logger.getLogger(OpenSearchConsumer.class.getSimpleName());
 
-        // create an OpenSearch Client
         RestHighLevelClient openSearchClient = createOpenSearchClient();
+        KafkaConsumer<String, String> consumer = createKafkaConsumer();
 
-        // we need to create the index on opensearch if it doesn't exist already
-        try(openSearchClient) {
-            boolean indexExists = openSearchClient.indices().exists(new GetIndexRequest("wikimedia"), RequestOptions.DEFAULT);
+        try (openSearchClient; consumer) {
 
-            if(!indexExists){
-                CreateIndexRequest createIndexRequest = new CreateIndexRequest("wikimedia");
-                openSearchClient.indices().create(createIndexRequest, RequestOptions.DEFAULT);
+            // Ensure index exists
+            boolean indexExists = openSearchClient.indices()
+                    .exists(new GetIndexRequest("wikimedia"), RequestOptions.DEFAULT);
+            if (!indexExists) {
+                openSearchClient.indices()
+                        .create(new CreateIndexRequest("wikimedia"), RequestOptions.DEFAULT);
                 log.info("Wikimedia index created");
-            }else{
+            } else {
                 log.info("Wikimedia index already exists");
             }
 
+            // Subscribe BEFORE the loop
+            consumer.subscribe(Collections.singletonList("wikimedia.recentchange"));
+
+            // Poll loop
+            while (true) {
+                ConsumerRecords<String, String> records = consumer.poll(Duration.ofSeconds(1));
+                if (records.isEmpty()) continue;
+
+                log.info("Received " + records.count() + " records");
+                for (ConsumerRecord<String, String> record : records) {
+                    try{
+                        IndexRequest indexRequest = new IndexRequest("wikimedia")
+                                .source(record.value(), XContentType.JSON);
+                        IndexResponse response = openSearchClient.index(indexRequest, RequestOptions.DEFAULT);
+                        log.info(response.getId());
+                    } catch( Exception e){
+                        log.info(e.getMessage());
+                    }
+
+                }
+            }
         }
-
-
-        // create our kafka client
-        // main code logic
-        // close things
     }
+
 }
